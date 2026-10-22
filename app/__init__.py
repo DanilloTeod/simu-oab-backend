@@ -1,42 +1,54 @@
 
-"""
-Para o Python: Ele transforma a pasta app em um pacote importável, permitindo que o run.py 
-(que está fora da pasta) consiga "enxergar" a função create_app.
-
-"""
-
 from flask import Flask
-
-# importando as ferramentas
-from app.extensions import db, jwt
-from flask_cors import CORS # permite a conexao do frontend com backend
+from flask_cors import CORS
 from dotenv import load_dotenv
+from datetime import timedelta
 import os
 
+from app.extensions import db, jwt
+
+
 load_dotenv()
-api_jwt_key=os.getenv("JWT_SECRET_KEY")
+
 
 def create_app():
-    app = Flask(__name__) # cria a instancia do Flask
+    app = Flask(__name__)
 
+    # Carrega a chave secreta do ambiente
+    api_jwt_key = os.getenv("JWT_SECRET_KEY")
+
+    if not api_jwt_key:
+        raise RuntimeError(
+            "JWT_SECRET_KEY não foi configurada no ambiente."
+        )
+
+    # Configurações básicas
+    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///banco_dados.db"
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    # Configurações JWT
+    app.config["JWT_SECRET_KEY"] = api_jwt_key
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
+    app.config["JWT_TOKEN_LOCATION"] = ["headers"]
+
+    # Permite a comunicação com o frontend
     CORS(app)
-    # definindo as configurações basicas
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///banco_dados.db'
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['JWT_SECRET_KEY'] = api_jwt_key
 
-    # importa e registra as rotas de autenticação
-    from app.routes.auth import auth_bp
-    from app.routes.simulados import simulados_bp
-    app.register_blueprint(auth_bp)
-    app.register_blueprint(simulados_bp)
-
-    # conectando as extensoes ao app
+    # Inicializa as extensões
     db.init_app(app)
     jwt.init_app(app)
 
+    # Registra as rotas
+    from app.routes.auth import auth_bp
+    from app.routes.simulados import simulados_bp
+
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(simulados_bp)
+
+    # Importa os modelos e cria as tabelas
     from app import models
+
     with app.app_context():
         db.create_all()
 
-    return app # retorna a aplicação final pronta
+    return app
