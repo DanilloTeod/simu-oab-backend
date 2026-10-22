@@ -1,66 +1,124 @@
-from app.extensions import db # importa banco de dados
-from flask_jwt_extended import create_access_token # função que gera token jwt
-from app.models import Estudante 
-from flask import Blueprint, request, jsonify # importa blueprint (planta baixa)
-                                            # agrupa rotas do mesmo assunto
+
+from flask import Blueprint, request, jsonify
+from flask_jwt_extended import (
+    create_access_token,
+    jwt_required,
+    get_jwt_identity,
+)
+from sqlalchemy.exc import IntegrityError
+
+from app.extensions import db
+from app.models import Estudante
 
 
-auth_bp = Blueprint('auth', __name__) # criação do blueprint
+auth_bp = Blueprint("auth", __name__)
 
-# essa rota recebera o fetch do frontend 
-"""
-    vem do front
-    {
-    question_id: questao.id,   // Ex: 1
-    subject: questao.materia,         // Ex: a matéria da questão
-    selected_option: choice, // Ex: "a"
-    is_correct: acertou   // ou false (calculado no front-end se acertou ou errou)
-    };
-"""
-@auth_bp.route('/api/cadastro', methods=['POST'])
+
+# Cadastro público
+@auth_bp.route("/api/cadastro", methods=["POST"])
 def cadastrar():
-    dados = request.get_json()# pega os dados que o frontend enviou
+    dados = request.get_json(silent=True)
 
-    # Validações
-    if (not dados.get('nome') or not dados.get('senha') 
-        or not dados.get('senha')):
+    if not isinstance(dados, dict):
+        return jsonify({"erro": "Envie os dados em formato JSON."}), 400
+
+    nome = dados.get("nome")
+    email = dados.get("email")
+    senha = dados.get("senha")
+
+    if not all(
+        isinstance(campo, str) and campo.strip()
+        for campo in (nome, email, senha)
+    ):
         return jsonify({"erro": "Preencha todos os campos!"}), 400
 
-    if (Estudante.query.filter_by(email=dados['email']).first()):
-        return jsonify({"erro": "Este email já está cadastrado."}), 400
+    nome = nome.strip()
+    email = email.strip().lower()
+
+    if len(senha) < 8:
+        return jsonify({
+            "erro": "A senha deve ter pelo menos 8 caracteres."
+        }), 400
+
+    if Estudante.query.filter_by(email=email).first():
+        return jsonify({
+            "erro": "Este email já está cadastrado."
+        }), 409
 
     novo_estudante = Estudante(
-        nome = dados.get('nome'),
-        email = dados.get('email')
+        nome=nome,
+        email=email,
     )
-    novo_estudante.set_senha(dados.get('senha')) # gera o hash para armazenar no db
+    novo_estudante.set_senha(senha)
 
-    # salva no db 
-    db.session.add(novo_estudante)
-    db.session.commit()
-
-    return jsonify({"mensagem": "Estudante cadastrado com sucesso!"}), 201
-
-@auth_bp.route('/api/login', methods=['POST'])
-def login():
-    dados = request.get_json()
-
-    estudante = Estudante.query.filter_by(email=dados.get('email')).first()
-
-    # verifica se o estudante existe e se a senha bate com o hash
-    if (estudante and estudante.verificar_senha(dados.get('senha'))):
-        # Gera o Token JWT carimbando o ID do estudante escondido lá dentro
-        token = create_access_token(identity=str(estudante.id))
+    try:
+        db.session.add(novo_estudante)
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
         return jsonify({
-            "mensagem": "Login aprovado",
-            "token": token,
-            "estudante": {
-                "id": estudante.id,
-                "nome": estudante.nome
-            }
-        }), 200
+            "erro": "Não foi possível cadastrar. Verifique se o email já existe."
+        }), 409
 
-    return jsonify({"erro": "Email ou senha incorretos"}), 401
+    return jsonify({
+        "mensagem": "Estudante cadastrado com sucesso!"
+    }), 201
 
 
+# Login público
+@auth_bp.route("/api/login", methods=["POST"])
+def login():
+    dados = request.get_json(silent=True)
 
+    if not isinstance(dados, dict):
+        return jsonify({"erro": "Envie os dados em formato JSON."}), 400
+
+    email = dados.get("email")
+    senha = dados.get("senha")
+
+    if not isinstance(email, str) or not isinstance(senha, str):
+        return jsonify({"erro": "Informe email e senha."}), 400
+
+    estudante = Estudante.query.filter_by(
+        email=email.strip().lower()
+    ).first()
+
+    if not estudante or not estudante.verificar_senha(senha):
+        return jsonify({
+            "erro": "Email ou senha incorretos."
+        }), 401
+
+    token = create_access_token(
+        identity=str(estudante.id)
+    )
+
+    return jsonify({
+        "mensagem": "Login aprovado",
+        "token": token,
+        "estudante": {
+            "id": estudante.id,
+            "nome": estudante.nome,
+        },
+    }), 200
+
+
+# Perfil protegido: exige token JWT
+@auth_bp.route("/api/perfil", methods=["GET"])
+@jwt_required()
+def perfil():
+    estudante_id = get_jwt_identity()
+
+    estudante = db.session.get(
+        Estudante, int(estudante_id)
+    )
+
+    if not estudante:
+        return jsonify({
+            "erro": "Estudante não encontrado."
+        }), 404
+
+    return jsonify({
+        "id": estudante.id,
+        "nome": estudante.nome,
+        "email": estudante.email,
+    }), 200
