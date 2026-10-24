@@ -1,6 +1,6 @@
 # Simulado OAB — Backend
 
-API REST para cadastro e autenticação de estudantes e persistência dos resultados dos simulados do projeto [Simulado OAB](https://github.com/DanilloTeod/simu-oab-frontend). A aplicação foi construída com Flask, Flask-SQLAlchemy, SQLite e JWT.
+API REST para cadastro e autenticação de estudantes e persistência dos resultados dos simulados do projeto [Simulado OAB](https://github.com/DanilloTeod/simu-oab). A aplicação foi construída com Flask, Flask-SQLAlchemy, SQLite e JWT.
 
 ## Funcionalidades
 
