@@ -3,3 +3,6 @@ __pycache__
 .venv
 .env
 instance
+banco_dados.db
+*.sqlite
+*.sqlite3

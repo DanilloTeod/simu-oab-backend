@@ -1,4 +1,6 @@
 
+import os
+
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import (
     create_access_token,
@@ -12,6 +14,15 @@ from app.models import Estudante
 
 
 auth_bp = Blueprint("auth", __name__)
+
+
+def estudante_e_admin(estudante):
+    emails_admin = {
+        email.strip().lower()
+        for email in os.getenv("ADMIN_EMAILS", "").split(",")
+        if email.strip()
+    }
+    return estudante.email.strip().lower() in emails_admin
 
 
 # Cadastro público
@@ -99,6 +110,7 @@ def login():
             "id": estudante.id,
             "nome": estudante.nome,
         },
+        "is_admin": estudante_e_admin(estudante),
     }), 200
 
 
@@ -121,4 +133,5 @@ def perfil():
         "id": estudante.id,
         "nome": estudante.nome,
         "email": estudante.email,
+        "is_admin": estudante_e_admin(estudante),
     }), 200

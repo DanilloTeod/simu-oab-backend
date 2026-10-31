@@ -1,6 +1,5 @@
 from app.extensions import db # importa o db
 from datetime import datetime, timezone 
-
 # biblioteca do flask para criptografar senhas
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -49,4 +48,13 @@ class ResultadoSimulado(db.Model):
     respostas_marcadas = db.Column(db.JSON, nullable=False)
     data_envio = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
-    
+
+class Presenca(db.Model):
+    session_id = db.Column(db.String(36), primary_key=True)
+    estudante_id = db.Column(db.Integer, db.ForeignKey('estudante.id'), nullable=True, index=True)
+    ultima_atividade = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
