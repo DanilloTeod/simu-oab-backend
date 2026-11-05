@@ -1,6 +1,7 @@
 from app.extensions import db # importa banco de dados
 from flask_jwt_extended import jwt_required, get_jwt_identity # função que gera token jwt
 from app.models import ResultadoSimulado
+from app.date_utils import isoformat_utc
 from flask import Blueprint, request, jsonify # importa blueprint (planta baixa)
                                             # agrupa rotas do mesmo assunto
 
@@ -66,11 +67,7 @@ def historico():
             "total_questions": simulado.questoes_totais,
             "score": simulado.questoes_corretas,
             "answers": simulado.respostas_marcadas,
-            "submitted_at": (
-                simulado.data_envio.isoformat()
-                if simulado.data_envio
-                else None
-            ),
+            "submitted_at": isoformat_utc(simulado.data_envio),
         }
         for simulado in simulados_estudante
     ]

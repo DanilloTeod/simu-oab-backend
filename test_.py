@@ -249,6 +249,12 @@ def test_dashboard_lista_identidade_das_contas_online(client, app):
     assert len(online) == 1
     assert online[0]["email"] == "aluna@example.com"
     assert online[0]["name"] == "Aluna"
+    assert online[0]["last_activity"].endswith("+00:00")
+    estudante = next(
+        item for item in resposta.get_json()["students"]
+        if item["email"] == "aluna@example.com"
+    )
+    assert estudante["simulations"][0]["submitted_at"].endswith("+00:00")
 
 
 def test_presenca_conta_estudantes_e_sessoes_anonimas(client, app):

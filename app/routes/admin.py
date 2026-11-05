@@ -7,6 +7,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy.exc import IntegrityError
 from app.extensions import db
+from app.date_utils import isoformat_utc
 from app.models import Estudante, Presenca, ResultadoSimulado
 
 
@@ -141,11 +142,7 @@ def dashboard_admin():
             "total_questions": simulado.questoes_totais,
             "score": simulado.questoes_corretas,
             "answers": simulado.respostas_marcadas,
-            "submitted_at": (
-                simulado.data_envio.isoformat()
-                if simulado.data_envio
-                else None
-            ),
+            "submitted_at": isoformat_utc(simulado.data_envio),
         })
 
     return jsonify({
@@ -163,9 +160,9 @@ def dashboard_admin():
                 "name": estudante.nome,
                 "email": estudante.email,
                 "is_admin": estudante.is_admin,
-                "last_activity": presencas_por_estudante[
-                    estudante.id
-                ].isoformat(),
+                "last_activity": isoformat_utc(
+                    presencas_por_estudante[estudante.id]
+                ),
             }
             for estudante in estudantes
             if estudante.id in presencas_por_estudante
