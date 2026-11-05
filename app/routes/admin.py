@@ -382,6 +382,7 @@ def editar_usuario_admin(estudante_id):
             }), 400
         estudante.set_senha(senha)
 
+    estudante.auth_version += 1
     try:
         db.session.commit()
     except IntegrityError:

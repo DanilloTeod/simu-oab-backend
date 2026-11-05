@@ -2,6 +2,7 @@ from app.extensions import db # importa o db
 from datetime import datetime, timezone 
 # biblioteca do flask para criptografar senhas
 from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy import text
 
 class Estudante(db.Model): # tabela estudante
 
@@ -12,6 +13,12 @@ class Estudante(db.Model): # tabela estudante
     email = db.Column(db.String(150), unique=True, nullable=False)
     is_admin = db.Column(db.Boolean, nullable=False, default=False)
     is_deleted = db.Column(db.Boolean, nullable=False, default=False)
+    auth_version = db.Column(
+        db.Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
 
     # salvando a senha hash
     senha_hash = db.Column(db.String(255), nullable=False)

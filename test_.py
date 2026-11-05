@@ -1,11 +1,16 @@
 import sqlite3
+import re
+from urllib.parse import parse_qs, urlparse
+from unittest.mock import MagicMock
 
 import pytest
 from flask_jwt_extended import create_access_token
+from itsdangerous import URLSafeTimedSerializer
 
 from app import create_app
 from app.extensions import db
 from app.models import Estudante, Presenca, ResultadoSimulado
+from app.routes import auth
 
 
 @pytest.fixture
@@ -15,10 +20,18 @@ def app(monkeypatch):
         "FRONTEND_ORIGINS",
         "https://simu-oab.vercel.app,http://localhost:5173",
     )
+    monkeypatch.setenv("SMTP_HOST", "smtp.test.invalid")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "test-user")
+    monkeypatch.setenv("SMTP_PASSWORD", "test-password")
+    monkeypatch.setenv("SMTP_USE_TLS", "true")
+    monkeypatch.setenv("MAIL_FROM", "noreply@example.com")
+    monkeypatch.setenv("FRONTEND_URL", "http://localhost:5173")
     app = create_app({
         "TESTING": True,
         "SQLALCHEMY_DATABASE_URI": "sqlite://",
         "JWT_SECRET_KEY": "test-key-long-enough-for-hmac-sha256",
+        "FRONTEND_URL": "http://localhost:5173",
     })
 
     with app.app_context():
@@ -64,7 +77,35 @@ def client(app):
 
 def token_para(app, estudante_id):
     with app.app_context():
-        return create_access_token(identity=str(estudante_id))
+        estudante = db.session.get(Estudante, estudante_id)
+        return create_access_token(
+            identity=str(estudante_id),
+            additional_claims={"auth_version": estudante.auth_version},
+        )
+
+
+def token_redefinicao_para(app, estudante_id):
+    with app.app_context():
+        estudante = db.session.get(Estudante, estudante_id)
+        return URLSafeTimedSerializer(
+            app.config["JWT_SECRET_KEY"],
+            salt="password-reset",
+        ).dumps({
+            "estudante_id": estudante.id,
+            "auth_version": estudante.auth_version,
+        })
+
+
+def smtp_mock(monkeypatch, error=None):
+    servidor = MagicMock()
+    servidor_cm = MagicMock()
+    servidor_cm.__enter__.return_value = servidor
+    servidor_cm.__exit__.return_value = False
+    fabrica = MagicMock(return_value=servidor_cm)
+    if error:
+        fabrica.side_effect = error
+    monkeypatch.setattr(auth.smtplib, "SMTP", fabrica)
+    return fabrica, servidor
 
 
 def test_login_identifica_administrador(client):
@@ -75,6 +116,197 @@ def test_login_identifica_administrador(client):
 
     assert resposta.status_code == 200
     assert resposta.get_json()["is_admin"] is True
+
+
+def test_solicitacao_redefinicao_nao_revela_se_email_existe(
+    client, monkeypatch
+):
+    _, servidor = smtp_mock(monkeypatch)
+    conhecida = client.post(
+        "/api/senha/recuperar",
+        json={"email": "aluna@example.com"},
+    )
+    desconhecida = client.post(
+        "/api/senha/recuperar",
+        json={"email": "nao-existe@example.com"},
+    )
+
+    assert conhecida.status_code == desconhecida.status_code == 200
+    assert conhecida.get_json() == desconhecida.get_json()
+    assert servidor.send_message.call_count == 1
+    mensagem = servidor.send_message.call_args.args[0]
+    assert mensagem["To"] == "aluna@example.com"
+    url = re.search(r"http://\S+", mensagem.get_content()).group(0)
+    parsed_url = urlparse(url)
+    assert f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}" == (
+        "http://localhost:5173/"
+    )
+    token = parse_qs(parsed_url.query)["reset_token"][0]
+    assert client.post("/api/senha/redefinir", json={
+        "token": token,
+        "senha": "senha-nova-segura",
+    }).status_code == 200
+
+
+def test_falha_smtp_mantem_resposta_generica_e_registra_erro(
+    client, monkeypatch, caplog
+):
+    smtp_mock(monkeypatch, error=OSError("smtp indisponível"))
+    resposta = client.post(
+        "/api/senha/recuperar",
+        json={"email": "aluna@example.com"},
+    )
+
+    assert resposta.status_code == 200
+    assert resposta.get_json() == {
+        "mensagem": (
+            "Se a conta estiver cadastrada, você receberá um email "
+            "com instruções para redefinir a senha."
+        )
+    }
+    assert "Verifique SMTP_HOST" in caplog.text
+
+
+def test_smtp_nao_configurado_mantem_resposta_generica(
+    client, monkeypatch, caplog
+):
+    fabrica, _ = smtp_mock(monkeypatch)
+    monkeypatch.delenv("SMTP_HOST")
+    resposta = client.post(
+        "/api/senha/recuperar",
+        json={"email": "aluna@example.com"},
+    )
+
+    assert resposta.status_code == 200
+    assert resposta.get_json() == {
+        "mensagem": (
+            "Se a conta estiver cadastrada, você receberá um email "
+            "com instruções para redefinir a senha."
+        )
+    }
+    fabrica.assert_not_called()
+    assert "Configuração SMTP incompleta" in caplog.text
+
+
+def test_redefinicao_senha_token_valido_e_reutilizacao_rejeitada(
+    client, app
+):
+    token = token_redefinicao_para(app, app.config["TEST_STUDENT_ID"])
+    redefinida = client.post("/api/senha/redefinir", json={
+        "token": token,
+        "senha": "senha-nova-segura",
+    })
+    reutilizada = client.post("/api/senha/redefinir", json={
+        "token": token,
+        "senha": "outra-senha-segura",
+    })
+
+    assert redefinida.status_code == 200
+    assert reutilizada.status_code == 400
+    assert client.post("/api/login", json={
+        "email": "aluna@example.com",
+        "senha": "senha-de-teste",
+    }).status_code == 401
+    assert client.post("/api/login", json={
+        "email": "aluna@example.com",
+        "senha": "senha-nova-segura",
+    }).status_code == 200
+
+
+def test_redefinicao_senha_rejeita_token_expirado(
+    client, app, monkeypatch
+):
+    token = token_redefinicao_para(app, app.config["TEST_STUDENT_ID"])
+    monkeypatch.setattr(auth, "RESET_TOKEN_MAX_AGE", -1)
+
+    resposta = client.post("/api/senha/redefinir", json={
+        "token": token,
+        "senha": "senha-nova-segura",
+    })
+
+    assert resposta.status_code == 400
+    assert "Token inválido ou expirado" in resposta.get_json()["erro"]
+
+
+def test_redefinicao_senha_exige_senha_minima(client, app):
+    token = token_redefinicao_para(app, app.config["TEST_STUDENT_ID"])
+    resposta = client.post("/api/senha/redefinir", json={
+        "token": token,
+        "senha": "curta",
+    })
+
+    assert resposta.status_code == 400
+    assert "8 caracteres" in resposta.get_json()["erro"]
+
+
+def test_estudante_atualiza_perfil_com_senha_atual_e_revoga_token(
+    client, app
+):
+    estudante_id = app.config["TEST_STUDENT_ID"]
+    token_antigo = token_para(app, estudante_id)
+    resposta = client.patch(
+        "/api/perfil",
+        headers={"Authorization": f"Bearer {token_antigo}"},
+        json={
+            "nome": "Aluna Atualizada",
+            "email": "aluna.nova@example.com",
+            "nova_senha": "senha-nova-segura",
+            "senha_atual": "senha-de-teste",
+        },
+    )
+
+    assert resposta.status_code == 200
+    assert resposta.get_json()["estudante"] == {
+        "id": estudante_id,
+        "nome": "Aluna Atualizada",
+        "email": "aluna.nova@example.com",
+        "is_admin": False,
+    }
+    assert client.get(
+        "/api/perfil",
+        headers={"Authorization": f"Bearer {token_antigo}"},
+    ).status_code == 401
+    token_novo = resposta.get_json()["token"]
+    assert client.get(
+        "/api/perfil",
+        headers={"Authorization": f"Bearer {token_novo}"},
+    ).status_code == 200
+    assert client.post("/api/login", json={
+        "email": "aluna.nova@example.com",
+        "senha": "senha-nova-segura",
+    }).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("dados", "status"),
+    [
+        ({"nome": "Nova"}, 400),
+        ({"nome": "Nova", "senha_atual": "incorreta"}, 401),
+        ({"email": "invalido", "senha_atual": "senha-de-teste"}, 400),
+        (
+            {"email": "admin@example.com", "senha_atual": "senha-de-teste"},
+            409,
+        ),
+        (
+            {
+                "nova_senha": "curta",
+                "senha_atual": "senha-de-teste",
+            },
+            400,
+        ),
+    ],
+)
+def test_edicao_perfil_rejeita_credencial_ou_dados_invalidos(
+    client, app, dados, status
+):
+    token = token_para(app, app.config["TEST_STUDENT_ID"])
+    resposta = client.patch(
+        "/api/perfil",
+        headers={"Authorization": f"Bearer {token}"},
+        json=dados,
+    )
+
+    assert resposta.status_code == status
 
 
 def test_historico_requer_login_e_retorna_apenas_resultados_do_aluno(client, app):
@@ -353,3 +585,4 @@ def test_migracao_adiciona_colunas_em_banco_existente(tmp_path, monkeypatch):
         estudante = db.session.get(Estudante, 1)
         assert estudante.is_admin is True
         assert estudante.is_deleted is False
+        assert estudante.auth_version == 0

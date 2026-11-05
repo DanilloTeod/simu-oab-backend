@@ -43,9 +43,18 @@ Ou crie um arquivo `.env` na raiz do backend, que não deve ser versionado:
 
 ```dotenv
 JWT_SECRET_KEY=uma-chave-aleatoria-forte
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=usuario-smtp
+SMTP_PASSWORD=senha-smtp
+SMTP_USE_TLS=true
+MAIL_FROM=noreply@example.com
+FRONTEND_URL=https://simu-oab.vercel.app
 ```
 
 `DATABASE_URL` pode apontar para um arquivo SQLite absoluto. Sem essa variável, o app usa `instance/banco_dados.db` relativo à aplicação. `FRONTEND_ORIGINS` recebe uma lista de origens permitidas separadas por vírgula; o padrão permite Vite local e `https://simu-oab.vercel.app`. `ADMIN_EMAILS` recebe emails separados por vírgula e concede a permissão administrativa inicial a essas contas. Cadastre a conta com esse email e faça login; depois, administradores podem conceder a permissão a outras contas pelo painel. Contas configuradas em `ADMIN_EMAILS` ficam protegidas contra remoção da permissão e exclusão até que o email seja retirado da variável.
+
+O envio da recuperação de senha usa `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD` e `MAIL_FROM`; `SMTP_PORT` assume `587` e `SMTP_USE_TLS` assume `true` quando omitidos. `SMTP_USE_TLS=false` desativa STARTTLS e deve ser usado somente quando o servidor SMTP estiver em uma rede confiável. `FRONTEND_URL` é a origem pública do frontend e recebe o link `/?reset_token=...`. Sem configuração SMTP ou em caso de falha no envio, a API mantém a resposta genérica e registra o erro para diagnóstico no log do servidor; nunca configure credenciais SMTP no frontend.
 
 Inicie o servidor:
 
@@ -53,7 +62,7 @@ Inicie o servidor:
 python run.py
 ```
 
-Por padrão, o Flask inicia em `http://127.0.0.1:5000`. A aplicação encerra com erro se `JWT_SECRET_KEY` não estiver configurada. Na inicialização, as tabelas são criadas no SQLite em `instance/banco_dados.db` se ainda não existirem; as colunas de permissão e exclusão lógica também são adicionadas às instalações existentes.
+Por padrão, o Flask inicia em `http://127.0.0.1:5000`. A aplicação encerra com erro se `JWT_SECRET_KEY` não estiver configurada. Na inicialização, as tabelas são criadas no SQLite em `instance/banco_dados.db` se ainda não existirem; as colunas de permissão, exclusão lógica e versão de autenticação também são adicionadas às instalações existentes. Após atualizar para esta versão, estudantes precisarão fazer login novamente: tokens emitidos pela versão anterior não têm a versão de autenticação necessária e são rejeitados.
 
 ## API
 
@@ -117,6 +126,39 @@ Authorization: Bearer <jwt>
 ```
 
 Retorna `404` se o estudante associado ao token não existir. As rotas protegidas exigem um token válido e não expirado.
+
+### `PATCH /api/perfil`
+
+Atualiza nome, email e/ou senha da própria conta. `senha_atual` é obrigatória para qualquer alteração; quando uma nova senha é enviada, ela deve ter ao menos oito caracteres. Email deve ser válido e não pode pertencer a outra conta.
+
+```json
+{
+  "nome": "Ana Silva",
+  "email": "ana.nova@example.com",
+  "senha_atual": "senha-atual",
+  "nova_senha": "nova-senha-segura"
+}
+```
+
+Resposta `200` contém `estudante` atualizado (`id`, `nome`, `email`, `is_admin`) e um novo `token`. A alteração invalida os tokens de sessão anteriores, inclusive o usado na requisição; use o token retornado. Retorna `400` para dados inválidos, `401` para senha atual incorreta ou `409` para email já cadastrado.
+
+### `POST /api/senha/recuperar`
+
+Solicita email de recuperação com `{"email":"ana@example.com"}`. Sempre retorna `200` e a mesma mensagem, exista ou não uma conta com esse email. O link enviado usa `FRONTEND_URL/?reset_token=...`; o token expira em uma hora.
+
+### `POST /api/senha/redefinir`
+
+Redefine a senha com o token recebido e uma senha de pelo menos oito caracteres:
+
+```json
+{
+  "token": "<reset_token>",
+  "senha": "nova-senha-segura"
+}
+```
+
+Tokens expirados, inválidos ou já utilizados retornam `400`. Após a redefinição, a conta precisa fazer login novamente e todas as sessões anteriores são invalidadas.
+As rotas anteriores `/api/password/forgot` e `/api/password/reset` continuam disponíveis como aliases.
 
 ### `POST /api/simulados/salvar`
 
@@ -253,3 +295,4 @@ python -m pytest -q
 ```
 
 Os testes usam bancos SQLite temporários/em memória e cobrem login administrativo, autorização, gerenciamento e anonimização de contas, migração de esquema, histórico, presença online e salvamento de simulados.
+Os testes de email usam configuração SMTP fictícia definida no ambiente de teste e mocks; não enviam mensagens reais.

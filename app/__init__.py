@@ -83,7 +83,16 @@ def create_app(test_config=None):
             return True
 
         estudante = db.session.get(Estudante, estudante_id)
-        return estudante is None or estudante.is_deleted
+        try:
+            versao_token = int(jwt_payload["auth_version"])
+        except (KeyError, TypeError, ValueError):
+            return True
+
+        return (
+            estudante is None
+            or estudante.is_deleted
+            or estudante.auth_version != versao_token
+        )
 
     return app
 
@@ -103,6 +112,11 @@ def _migrar_colunas_de_contas():
             conexao.execute(text(
                 "ALTER TABLE estudante ADD COLUMN "
                 "is_deleted BOOLEAN NOT NULL DEFAULT 0"
+            ))
+        if "auth_version" not in colunas:
+            conexao.execute(text(
+                "ALTER TABLE estudante ADD COLUMN "
+                "auth_version INTEGER NOT NULL DEFAULT 0"
             ))
 
 
