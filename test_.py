@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 from flask_jwt_extended import create_access_token
 
@@ -22,7 +24,11 @@ def app(monkeypatch):
     with app.app_context():
         db.drop_all()
         db.create_all()
-        admin = Estudante(nome="Admin", email="admin@example.com")
+        admin = Estudante(
+            nome="Admin",
+            email="admin@example.com",
+            is_admin=True,
+        )
         admin.set_senha("senha-de-teste")
         estudante = Estudante(nome="Aluna", email="aluna@example.com")
         estudante.set_senha("senha-de-teste")
@@ -105,6 +111,146 @@ def test_dashboard_admin_autorizado_e_rejeita_aluno_comum(client, app):
     assert proibido.status_code == 403
 
 
+def test_admin_cria_conta_e_atualiza_permissao(client, app):
+    admin_token = token_para(app, app.config["TEST_ADMIN_ID"])
+    cabecalhos = {"Authorization": f"Bearer {admin_token}"}
+
+    criada = client.post(
+        "/api/admin/users",
+        headers=cabecalhos,
+        json={
+            "nome": "Nova pessoa",
+            "email": "nova@example.com",
+            "senha": "senha-segura",
+            "is_admin": False,
+        },
+    )
+    assert criada.status_code == 201
+    estudante_id = criada.get_json()["user"]["id"]
+
+    promovida = client.patch(
+        f"/api/admin/users/{estudante_id}/role",
+        headers=cabecalhos,
+        json={"is_admin": True},
+    )
+    assert promovida.status_code == 200
+
+    login = client.post("/api/login", json={
+        "email": "nova@example.com",
+        "senha": "senha-segura",
+    })
+    assert login.status_code == 200
+    assert login.get_json()["is_admin"] is True
+
+
+def test_admin_nao_pode_remover_ultimo_administrador(
+    client, app, monkeypatch
+):
+    monkeypatch.setenv("ADMIN_EMAILS", "")
+    admin_token = token_para(app, app.config["TEST_ADMIN_ID"])
+    resposta = client.patch(
+        f"/api/admin/users/{app.config['TEST_ADMIN_ID']}/role",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"is_admin": False},
+    )
+    assert resposta.status_code == 409
+
+
+def test_admin_edita_conta_e_redefine_senha(client, app):
+    admin_token = token_para(app, app.config["TEST_ADMIN_ID"])
+    estudante_id = app.config["TEST_STUDENT_ID"]
+    resposta = client.patch(
+        f"/api/admin/users/{estudante_id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "nome": "Aluna Atualizada",
+            "email": "atualizada@example.com",
+            "senha": "nova-senha-segura",
+        },
+    )
+    assert resposta.status_code == 200
+
+    senha_antiga = client.post("/api/login", json={
+        "email": "atualizada@example.com",
+        "senha": "senha-de-teste",
+    })
+    senha_nova = client.post("/api/login", json={
+        "email": "atualizada@example.com",
+        "senha": "nova-senha-segura",
+    })
+    assert senha_antiga.status_code == 401
+    assert senha_nova.status_code == 200
+
+
+def test_exclusao_anonimiza_conta_preserva_simulados_e_revoga_token(
+    client, app
+):
+    estudante_id = app.config["TEST_STUDENT_ID"]
+    admin_token = token_para(app, app.config["TEST_ADMIN_ID"])
+    estudante_token = token_para(app, estudante_id)
+    with app.app_context():
+        db.session.add(Presenca(
+            session_id="00000000-0000-0000-0000-000000000005",
+            estudante_id=estudante_id,
+        ))
+        db.session.commit()
+
+    resposta = client.delete(
+        f"/api/admin/users/{estudante_id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert resposta.status_code == 200
+
+    with app.app_context():
+        estudante = db.session.get(Estudante, estudante_id)
+        assert estudante.is_deleted is True
+        assert estudante.nome == "Conta excluída"
+        assert estudante.email.endswith("@invalid.invalid")
+        assert ResultadoSimulado.query.filter_by(
+            estudante_id=estudante_id
+        ).count() == 1
+        presenca = db.session.get(
+            Presenca, "00000000-0000-0000-0000-000000000005"
+        )
+        assert presenca.estudante_id is None
+
+    historico = client.get(
+        "/api/simulados/historico",
+        headers={"Authorization": f"Bearer {estudante_token}"},
+    )
+    assert historico.status_code == 401
+
+    painel = client.get(
+        "/api/admin/dashboard",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert painel.status_code == 200
+    assert painel.get_json()["summary"]["total_students"] == 1
+    assert painel.get_json()["summary"]["total_simulations"] == 1
+
+
+def test_dashboard_lista_identidade_das_contas_online(client, app):
+    estudante_id = app.config["TEST_STUDENT_ID"]
+    with app.app_context():
+        db.session.add(Presenca(
+            session_id="00000000-0000-0000-0000-000000000006",
+            estudante_id=estudante_id,
+        ))
+        db.session.commit()
+
+    token = token_para(app, app.config["TEST_ADMIN_ID"])
+    resposta = client.get(
+        "/api/admin/dashboard",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    online = resposta.get_json()["online_users"]
+    assert resposta.status_code == 200
+    assert len(online) == 1
+    assert online[0]["email"] == "aluna@example.com"
+    assert online[0]["name"] == "Aluna"
+
+
 def test_presenca_conta_estudantes_e_sessoes_anonimas(client, app):
     estudante_id = app.config["TEST_STUDENT_ID"]
     with app.app_context():
@@ -172,3 +318,32 @@ def test_cors_permite_preflight_da_vercel(client):
         "https://simu-oab.vercel.app"
     )
     assert "POST" in resposta.headers["Access-Control-Allow-Methods"]
+
+
+def test_migracao_adiciona_colunas_em_banco_existente(tmp_path, monkeypatch):
+    database_path = tmp_path / "banco_antigo.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("""
+            CREATE TABLE estudante (
+                id INTEGER PRIMARY KEY,
+                nome VARCHAR(120) NOT NULL,
+                email VARCHAR(150) UNIQUE NOT NULL,
+                senha_hash VARCHAR(255) NOT NULL
+            )
+        """)
+        connection.execute(
+            "INSERT INTO estudante (nome, email, senha_hash) "
+            "VALUES (?, ?, ?)",
+            ("Admin legado", "admin-legado@example.com", "hash"),
+        )
+
+    monkeypatch.setenv("ADMIN_EMAILS", "admin-legado@example.com")
+    app = create_app({
+        "TESTING": True,
+        "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database_path}",
+        "JWT_SECRET_KEY": "test-key-long-enough-for-hmac-sha256",
+    })
+    with app.app_context():
+        estudante = db.session.get(Estudante, 1)
+        assert estudante.is_admin is True
+        assert estudante.is_deleted is False

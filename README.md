@@ -9,8 +9,10 @@ API REST para cadastro e autenticação de estudantes e persistência dos result
 - Consulta do perfil do estudante autenticado.
 - Salvamento do resultado e das respostas de um simulado.
 - Histórico de simulados protegido por JWT.
-- Painel administrativo com acesso definido por `ADMIN_EMAILS`.
-- Contagem de estudantes online a partir de heartbeats persistidos no SQLite.
+- Painel administrativo com gestão de contas, permissões e simulados.
+- Lista de contas autenticadas com atividade nos últimos dois minutos.
+- Exclusão que remove os dados pessoais e preserva os simulados anonimizados.
+- Permissões de administrador persistidas no banco de dados.
 - Criação das tabelas SQLite durante a inicialização da aplicação.
 
 As questões do exame **não** são servidas por esta API: o frontend carrega os arquivos JSON de questões localmente.
@@ -43,7 +45,7 @@ Ou crie um arquivo `.env` na raiz do backend, que não deve ser versionado:
 JWT_SECRET_KEY=uma-chave-aleatoria-forte
 ```
 
-`DATABASE_URL` pode apontar para um arquivo SQLite absoluto. Sem essa variável, o app usa `instance/banco_dados.db` relativo à aplicação. `FRONTEND_ORIGINS` recebe uma lista de origens permitidas separadas por vírgula; o padrão permite Vite local e `https://simu-oab.vercel.app`.
+`DATABASE_URL` pode apontar para um arquivo SQLite absoluto. Sem essa variável, o app usa `instance/banco_dados.db` relativo à aplicação. `FRONTEND_ORIGINS` recebe uma lista de origens permitidas separadas por vírgula; o padrão permite Vite local e `https://simu-oab.vercel.app`. `ADMIN_EMAILS` recebe emails separados por vírgula e concede a permissão administrativa inicial a essas contas. Cadastre a conta com esse email e faça login; depois, administradores podem conceder a permissão a outras contas pelo painel. Contas configuradas em `ADMIN_EMAILS` ficam protegidas contra remoção da permissão e exclusão até que o email seja retirado da variável.
 
 Inicie o servidor:
 
@@ -51,7 +53,7 @@ Inicie o servidor:
 python run.py
 ```
 
-Por padrão, o Flask inicia em `http://127.0.0.1:5000`. A aplicação encerra com erro se `JWT_SECRET_KEY` não estiver configurada. Na inicialização, as tabelas são criadas no SQLite em `instance/banco_dados.db` se ainda não existirem. `db.create_all()` não substitui migrações quando o esquema evolui.
+Por padrão, o Flask inicia em `http://127.0.0.1:5000`. A aplicação encerra com erro se `JWT_SECRET_KEY` não estiver configurada. Na inicialização, as tabelas são criadas no SQLite em `instance/banco_dados.db` se ainda não existirem; as colunas de permissão e exclusão lógica também são adicionadas às instalações existentes.
 
 ## API
 
@@ -173,6 +175,19 @@ Rota protegida. Envie o JWT no cabeçalho `Authorization: Bearer <jwt>`. A respo
 
 O frontend usa a edição e os identificadores das respostas para carregar os enunciados, alternativas, gabaritos e comentários do arquivo de questões correspondente.
 
+### Rotas administrativas
+
+Todas as rotas abaixo exigem `Authorization: Bearer <jwt>` de um administrador. O painel frontend oferece formulários para criar contas e ações para conceder/remover permissões e excluir contas.
+
+| Método e rota | Ação |
+| --- | --- |
+| `GET /api/admin/dashboard` | Retorna resumo, contas, simulados e contas autenticadas com atividade nos últimos dois minutos (`online_users`). |
+| `POST /api/admin/users` | Cria uma conta com `nome`, `email`, `senha` (mínimo oito caracteres) e `is_admin` opcional. |
+| `PATCH /api/admin/users/<id>/role` | Recebe `{"is_admin": true}` ou `false` para alterar a permissão. |
+| `DELETE /api/admin/users/<id>` | Remove nome, email e senha da conta, revoga os tokens e desassocia presenças; mantém os simulados anonimizados. |
+
+O sistema impede excluir a própria conta ou remover/excluir o último administrador. Ao excluir uma conta, o registro interno é mantido como marcador sem dados pessoais para preservar a relação técnica com simulados existentes; ele não pode mais entrar e não aparece na lista de contas.
+
 ## Integração com o frontend
 
 O cliente da API está em [`src/js/api.js`](../simu-oab-frontend/src/js/api.js). Atualmente, ele chama o backend publicado em `https://danilloteod.pythonanywhere.com` para:
@@ -198,7 +213,7 @@ Configure `ADMIN_EMAILS` no ambiente do backend com os emails autorizados, separ
 ADMIN_EMAILS=admin@example.com
 ```
 
-O painel administrativo requer login e valida o email autorizado no backend. A rota `GET /api/admin/dashboard` retorna dados pessoais dos estudantes e resultados somente para administradores.
+O primeiro administrador deve estar entre esses emails, criar a própria conta e fazer login. O backend persiste a permissão no banco; contas configuradas em `ADMIN_EMAILS` não podem perder essa permissão enquanto permanecerem na variável. O painel retorna dados de estudantes somente para administradores.
 
 O frontend visível envia um heartbeat a cada 30 segundos, ao abrir a página e ao retornar para ela. `POST /api/presenca` recebe um identificador UUID aleatório do navegador e, quando há login, associa a sessão ao estudante. O painel considera online quem teve atividade nos últimos dois minutos; estudantes autenticados são contados uma vez por aluno, e visitantes anônimos uma vez por sessão de navegador. A presença é persistida no banco do backend e registros inativos por mais de um dia são removidos em heartbeats posteriores. A hospedagem do frontend na Vercel não mantém esse contador: ela apenas envia os heartbeats para a API e consulta os totais.
 
@@ -227,7 +242,7 @@ O frontend visível envia um heartbeat a cada 30 segundos, ao abrir a página e 
 5. Publique o frontend na Vercel. Em produção, o cliente usa `https://danilloteod.pythonanywhere.com`; o CORS precisa incluir a origem exata do domínio Vercel.
 6. Abra o site publicado, faça login novamente com uma conta existente cujo email esteja em `ADMIN_EMAILS`. O botão **Admin** aparece na barra superior depois do login.
 
-Se já existe um banco com dados no servidor, mantenha `DATABASE_URL` apontando exatamente para esse arquivo. Se estiver migrando um banco local, faça uma cópia de segurança e transfira o arquivo para o armazenamento persistente antes de apontar a aplicação para ele. `db.create_all()` cria tabelas ausentes, mas não migra nem altera tabelas existentes.
+Se já existe um banco com dados no servidor, mantenha `DATABASE_URL` apontando exatamente para esse arquivo. Se estiver migrando um banco local, faça uma cópia de segurança e transfira o arquivo para o armazenamento persistente antes de apontar a aplicação para ele. Na inicialização, o backend adiciona as colunas administrativas necessárias às tabelas existentes; ainda assim, faça uma cópia de segurança antes do primeiro deploy.
 
 ## Testes
 
@@ -237,4 +252,4 @@ As dependências incluem `pytest`; execute a suíte com:
 python -m pytest -q
 ```
 
-Os testes usam um banco SQLite em memória e cobrem login administrativo, autorização, histórico, presença online e salvamento de simulados.
+Os testes usam bancos SQLite temporários/em memória e cobrem login administrativo, autorização, gerenciamento e anonimização de contas, migração de esquema, histórico, presença online e salvamento de simulados.

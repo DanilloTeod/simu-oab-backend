@@ -4,6 +4,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from datetime import timedelta
 import os
+from sqlalchemy import inspect, text
 from app.extensions import db, jwt
 
 load_dotenv()
@@ -69,5 +70,55 @@ def create_app(test_config=None):
 
     with app.app_context():
         db.create_all()
+        _migrar_colunas_de_contas()
+        _configurar_administradores_iniciais()
+
+    @jwt.token_in_blocklist_loader
+    def token_de_conta_excluida(jwt_header, jwt_payload):
+        from app.models import Estudante
+
+        try:
+            estudante_id = int(jwt_payload["sub"])
+        except (KeyError, TypeError, ValueError):
+            return True
+
+        estudante = db.session.get(Estudante, estudante_id)
+        return estudante is None or estudante.is_deleted
 
     return app
+
+
+def _migrar_colunas_de_contas():
+    colunas = {
+        coluna["name"]
+        for coluna in inspect(db.engine).get_columns("estudante")
+    }
+    with db.engine.begin() as conexao:
+        if "is_admin" not in colunas:
+            conexao.execute(text(
+                "ALTER TABLE estudante ADD COLUMN "
+                "is_admin BOOLEAN NOT NULL DEFAULT 0"
+            ))
+        if "is_deleted" not in colunas:
+            conexao.execute(text(
+                "ALTER TABLE estudante ADD COLUMN "
+                "is_deleted BOOLEAN NOT NULL DEFAULT 0"
+            ))
+
+
+def _configurar_administradores_iniciais():
+    from app.models import Estudante
+
+    emails = {
+        email.strip().lower()
+        for email in os.getenv("ADMIN_EMAILS", "").split(",")
+        if email.strip()
+    }
+    if not emails:
+        return
+
+    Estudante.query.filter(
+        db.func.lower(Estudante.email).in_(emails),
+        Estudante.is_deleted.is_(False),
+    ).update({Estudante.is_admin: True}, synchronize_session=False)
+    db.session.commit()

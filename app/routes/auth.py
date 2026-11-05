@@ -16,13 +16,13 @@ from app.models import Estudante
 auth_bp = Blueprint("auth", __name__)
 
 
-def estudante_e_admin(estudante):
+def email_configurado_como_admin(email):
     emails_admin = {
-        email.strip().lower()
-        for email in os.getenv("ADMIN_EMAILS", "").split(",")
-        if email.strip()
+        item.strip().lower()
+        for item in os.getenv("ADMIN_EMAILS", "").split(",")
+        if item.strip()
     }
-    return estudante.email.strip().lower() in emails_admin
+    return email.strip().lower() in emails_admin
 
 
 # Cadastro público
@@ -45,6 +45,9 @@ def cadastrar():
 
     nome = nome.strip()
     email = email.strip().lower()
+
+    if len(nome) > 120 or len(email) > 150:
+        return jsonify({"erro": "Nome ou email excede o tamanho permitido."}), 400
 
     if len(senha) < 8:
         return jsonify({
@@ -94,10 +97,18 @@ def login():
         email=email.strip().lower()
     ).first()
 
-    if not estudante or not estudante.verificar_senha(senha):
+    if (
+        not estudante
+        or estudante.is_deleted
+        or not estudante.verificar_senha(senha)
+    ):
         return jsonify({
             "erro": "Email ou senha incorretos."
         }), 401
+
+    if email_configurado_como_admin(estudante.email) and not estudante.is_admin:
+        estudante.is_admin = True
+        db.session.commit()
 
     token = create_access_token(
         identity=str(estudante.id)
@@ -110,7 +121,7 @@ def login():
             "id": estudante.id,
             "nome": estudante.nome,
         },
-        "is_admin": estudante_e_admin(estudante),
+        "is_admin": estudante.is_admin,
     }), 200
 
 
@@ -133,5 +144,5 @@ def perfil():
         "id": estudante.id,
         "nome": estudante.nome,
         "email": estudante.email,
-        "is_admin": estudante_e_admin(estudante),
+        "is_admin": estudante.is_admin,
     }), 200
