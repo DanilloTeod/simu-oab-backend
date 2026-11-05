@@ -19,6 +19,7 @@ class Estudante(db.Model): # tabela estudante
         default=0,
         server_default=text("0"),
     )
+    last_activity_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     # salvando a senha hash
     senha_hash = db.Column(db.String(255), nullable=False)

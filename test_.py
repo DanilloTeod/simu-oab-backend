@@ -1,5 +1,6 @@
 import sqlite3
 import re
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import MagicMock
 
@@ -45,6 +46,9 @@ def app(monkeypatch):
         admin.set_senha("senha-de-teste")
         estudante = Estudante(nome="Aluna", email="aluna@example.com")
         estudante.set_senha("senha-de-teste")
+        agora = datetime.now(timezone.utc)
+        admin.last_activity_at = agora
+        estudante.last_activity_at = agora
         db.session.add_all([admin, estudante])
         db.session.flush()
         db.session.add(ResultadoSimulado(
@@ -116,6 +120,95 @@ def test_login_identifica_administrador(client):
 
     assert resposta.status_code == 200
     assert resposta.get_json()["is_admin"] is True
+    with client.application.app_context():
+        administrador = db.session.get(
+            Estudante,
+            client.application.config["TEST_ADMIN_ID"],
+        )
+        assert administrador.last_activity_at is not None
+
+
+def test_sessao_expira_apos_uma_hora_sem_atividade(client, app):
+    estudante_id = app.config["TEST_STUDENT_ID"]
+    with app.app_context():
+        estudante = db.session.get(Estudante, estudante_id)
+        estudante.last_activity_at = (
+            datetime.now(timezone.utc) - timedelta(hours=1, seconds=1)
+        )
+        db.session.commit()
+
+    resposta = client.get(
+        "/api/simulados/historico",
+        headers={"Authorization": f"Bearer {token_para(app, estudante_id)}"},
+    )
+
+    assert resposta.status_code == 401
+
+
+def test_atividade_autenticada_renova_sessao(client, app):
+    estudante_id = app.config["TEST_STUDENT_ID"]
+    with app.app_context():
+        estudante = db.session.get(Estudante, estudante_id)
+        estudante.last_activity_at = (
+            datetime.now(timezone.utc) - timedelta(minutes=55)
+        )
+        db.session.commit()
+
+    resposta = client.post(
+        "/api/sessao/atividade",
+        headers={"Authorization": f"Bearer {token_para(app, estudante_id)}"},
+    )
+
+    assert resposta.status_code == 200
+    assert "token" not in resposta.get_json()
+    with app.app_context():
+        estudante = db.session.get(Estudante, estudante_id)
+        ultima_atividade = estudante.last_activity_at
+        if ultima_atividade.tzinfo is None:
+            ultima_atividade = ultima_atividade.replace(tzinfo=timezone.utc)
+        assert datetime.now(timezone.utc) - ultima_atividade < timedelta(seconds=5)
+
+
+def test_atividade_renova_jwt_proximo_da_expiracao(client, app):
+    estudante_id = app.config["TEST_STUDENT_ID"]
+    with app.app_context():
+        estudante = db.session.get(Estudante, estudante_id)
+        token = create_access_token(
+            identity=str(estudante_id),
+            additional_claims={"auth_version": estudante.auth_version},
+            expires_delta=timedelta(days=1),
+        )
+
+    resposta = client.post(
+        "/api/sessao/atividade",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resposta.status_code == 200
+    assert resposta.get_json()["token"] != token
+
+
+def test_heartbeat_de_presenca_nao_renova_sessao_inativa(client, app):
+    estudante_id = app.config["TEST_STUDENT_ID"]
+    atividade_anterior = datetime.now(timezone.utc) - timedelta(minutes=50)
+    with app.app_context():
+        estudante = db.session.get(Estudante, estudante_id)
+        estudante.last_activity_at = atividade_anterior
+        db.session.commit()
+
+    resposta = client.post(
+        "/api/presenca",
+        json={"session_id": "00000000-0000-0000-0000-000000000005"},
+        headers={"Authorization": f"Bearer {token_para(app, estudante_id)}"},
+    )
+
+    assert resposta.status_code == 200
+    with app.app_context():
+        estudante = db.session.get(Estudante, estudante_id)
+        ultima_atividade = estudante.last_activity_at
+        if ultima_atividade.tzinfo is None:
+            ultima_atividade = ultima_atividade.replace(tzinfo=timezone.utc)
+        assert abs((ultima_atividade - atividade_anterior).total_seconds()) < 2
 
 
 def test_solicitacao_redefinicao_nao_revela_se_email_existe(
@@ -586,3 +679,4 @@ def test_migracao_adiciona_colunas_em_banco_existente(tmp_path, monkeypatch):
         assert estudante.is_admin is True
         assert estudante.is_deleted is False
         assert estudante.auth_version == 0
+        assert estudante.last_activity_at is None

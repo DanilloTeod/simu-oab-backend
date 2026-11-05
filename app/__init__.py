@@ -1,8 +1,8 @@
 
-from flask import Flask
+from flask import Flask, request
 from flask_cors import CORS
 from dotenv import load_dotenv
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import os
 from sqlalchemy import inspect, text
 from app.extensions import db, jwt
@@ -32,7 +32,7 @@ def create_app(test_config=None):
 
     # Configurações JWT
     app.config["JWT_SECRET_KEY"] = api_jwt_key
-    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=30)
     app.config["JWT_TOKEN_LOCATION"] = ["headers"]
 
     if test_config:
@@ -88,11 +88,30 @@ def create_app(test_config=None):
         except (KeyError, TypeError, ValueError):
             return True
 
-        return (
+        if (
             estudante is None
             or estudante.is_deleted
             or estudante.auth_version != versao_token
-        )
+        ):
+            return True
+
+        agora = datetime.now(timezone.utc)
+        ultima_atividade = estudante.last_activity_at
+        if ultima_atividade is None:
+            return True
+        if ultima_atividade.tzinfo is None:
+            ultima_atividade = ultima_atividade.replace(tzinfo=timezone.utc)
+        if agora - ultima_atividade >= timedelta(hours=1):
+            return True
+
+        if request.path not in {
+            "/api/presenca",
+            "/api/admin/dashboard",
+        }:
+            estudante.last_activity_at = agora
+            db.session.commit()
+
+        return False
 
     return app
 
@@ -117,6 +136,10 @@ def _migrar_colunas_de_contas():
             conexao.execute(text(
                 "ALTER TABLE estudante ADD COLUMN "
                 "auth_version INTEGER NOT NULL DEFAULT 0"
+            ))
+        if "last_activity_at" not in colunas:
+            conexao.execute(text(
+                "ALTER TABLE estudante ADD COLUMN last_activity_at DATETIME"
             ))
 
 

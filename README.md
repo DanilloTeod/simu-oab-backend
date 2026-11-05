@@ -5,7 +5,7 @@ API REST para cadastro e autenticação de estudantes e persistência dos result
 ## Funcionalidades
 
 - Cadastro de estudantes com senha armazenada como hash.
-- Login e emissão de token JWT com validade de uma hora.
+- Login e emissão de token JWT com validade técnica de 30 dias e expiração por uma hora sem atividade.
 - Consulta do perfil do estudante autenticado.
 - Salvamento do resultado e das respostas de um simulado.
 - Histórico de simulados protegido por JWT.
@@ -62,7 +62,7 @@ Inicie o servidor:
 python run.py
 ```
 
-Por padrão, o Flask inicia em `http://127.0.0.1:5000`. A aplicação encerra com erro se `JWT_SECRET_KEY` não estiver configurada. Na inicialização, as tabelas são criadas no SQLite em `instance/banco_dados.db` se ainda não existirem; as colunas de permissão, exclusão lógica e versão de autenticação também são adicionadas às instalações existentes. Após atualizar para esta versão, estudantes precisarão fazer login novamente: tokens emitidos pela versão anterior não têm a versão de autenticação necessária e são rejeitados.
+Por padrão, o Flask inicia em `http://127.0.0.1:5000`. A aplicação encerra com erro se `JWT_SECRET_KEY` não estiver configurada. Na inicialização, as tabelas são criadas no SQLite em `instance/banco_dados.db` se ainda não existirem; as colunas de permissão, exclusão lógica, versão de autenticação e última atividade também são adicionadas às instalações existentes. Após atualizar para esta versão, estudantes precisarão fazer login novamente para iniciar o controle de inatividade.
 
 ## API
 
@@ -238,12 +238,15 @@ O cliente da API está em [`src/js/api.js`](../simu-oab-frontend/src/js/api.js).
 | --- | --- |
 | Cadastro | `POST /api/cadastro` |
 | Login | `POST /api/login` |
+| Renovar atividade da sessão autenticada | `POST /api/sessao/atividade` |
 | Salvar resultado | `POST /api/simulados/salvar` |
 | Consultar histórico | `GET /api/simulados/historico` |
 | Registrar presença | `POST /api/presenca` |
 | Painel administrativo | `GET /api/admin/dashboard` |
 
 Após o login, o frontend guarda o JWT em `localStorage` na chave `token_oab` e o nome em `user_name`. Ao salvar um simulado, envia o JWT como `Bearer` e o objeto com `edition`, `total_questions`, `score` e `answers`. O frontend só tenta salvar o resultado quando encontra um token.
+
+O JWT tem validade técnica de 30 dias e é renovado próximo da expiração enquanto a sessão está ativa. A conta encerra a sessão após uma hora sem atividade. Requisições autenticadas e o endpoint `POST /api/sessao/atividade` atualizam a atividade; heartbeats automáticos de presença e consultas periódicas do painel não contam como interação.
 
 No modo de desenvolvimento, o frontend usa `http://127.0.0.1:5000`; no build de produção, usa `https://danilloteod.pythonanywhere.com`. As questões continuam sendo carregadas separadamente pelo frontend a partir de `/data/questoes_oab_<edição>_tipo1.json`. O backend aceita as origens `http://localhost:5173`, `http://127.0.0.1:5173` e `https://simu-oab.vercel.app` por padrão. Defina `FRONTEND_ORIGINS` para sobrescrever a lista, usando origens completas separadas por vírgula.
 

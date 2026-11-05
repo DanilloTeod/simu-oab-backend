@@ -3,12 +3,14 @@ import os
 import re
 import smtplib
 import ssl
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from urllib.parse import urlencode
 
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import (
     create_access_token,
+    get_jwt,
     jwt_required,
     get_jwt_identity,
 )
@@ -187,7 +189,8 @@ def login():
 
     if email_configurado_como_admin(estudante.email) and not estudante.is_admin:
         estudante.is_admin = True
-        db.session.commit()
+    estudante.last_activity_at = datetime.now(timezone.utc)
+    db.session.commit()
 
     token = create_access_token(
         identity=str(estudante.id),
@@ -203,6 +206,20 @@ def login():
         },
         "is_admin": estudante.is_admin,
     }), 200
+
+
+@auth_bp.route("/api/sessao/atividade", methods=["POST"])
+@jwt_required()
+def registrar_atividade_sessao():
+    expira_em = datetime.fromtimestamp(get_jwt()["exp"], timezone.utc)
+    resposta = {"mensagem": "Atividade registrada."}
+    if expira_em - datetime.now(timezone.utc) < timedelta(days=7):
+        estudante = db.session.get(Estudante, int(get_jwt_identity()))
+        resposta["token"] = create_access_token(
+            identity=str(estudante.id),
+            additional_claims={"auth_version": estudante.auth_version},
+        )
+    return jsonify(resposta), 200
 
 
 # Perfil protegido: exige token JWT
@@ -379,6 +396,7 @@ def editar_perfil():
             }), 400
         estudante.set_senha(senha)
 
+    estudante.last_activity_at = datetime.now(timezone.utc)
     estudante.auth_version += 1
     try:
         db.session.commit()
