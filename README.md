@@ -10,6 +10,7 @@ API REST para cadastro e autenticação de estudantes e persistência dos result
 - Salvamento do resultado e das respostas de um simulado.
 - Histórico de simulados protegido por JWT.
 - Painel administrativo com gestão de contas, permissões e simulados.
+- Último acesso registrado para cada conta no painel administrativo.
 - Lista de contas autenticadas com atividade nos últimos dois minutos.
 - Exclusão que remove os dados pessoais e preserva os simulados anonimizados.
 - Permissões de administrador persistidas no banco de dados.
@@ -111,7 +112,8 @@ Resposta `200`:
     "id": 1,
     "nome": "Ana Silva"
   },
-  "is_admin": false
+  "is_admin": false,
+  "can_use_personal_theme": false
 }
 ```
 
@@ -119,7 +121,7 @@ Retorna `400` se os dados estiverem ausentes ou inválidos e `401` se as credenc
 
 ### `GET /api/perfil`
 
-Retorna `id`, `nome` e `email` do estudante autenticado. Envie o token no cabeçalho:
+Retorna `id`, `nome`, `email`, `is_admin` e `can_use_personal_theme` do estudante autenticado. Envie o token no cabeçalho:
 
 ```http
 Authorization: Bearer <jwt>
@@ -223,8 +225,9 @@ Todas as rotas abaixo exigem `Authorization: Bearer <jwt>` de um administrador. 
 
 | Método e rota | Ação |
 | --- | --- |
-| `GET /api/admin/dashboard` | Retorna resumo, contas, simulados e contas autenticadas com atividade nos últimos dois minutos (`online_users`). |
+| `GET /api/admin/dashboard` | Retorna resumo, contas com `last_access`, simulados e contas autenticadas com atividade nos últimos dois minutos (`online_users`). |
 | `POST /api/admin/users` | Cria uma conta com `nome`, `email`, `senha` (mínimo oito caracteres) e `is_admin` opcional. |
+| `PATCH /api/admin/users/<id>` | Atualiza nome, email e/ou senha da conta. |
 | `PATCH /api/admin/users/<id>/role` | Recebe `{"is_admin": true}` ou `false` para alterar a permissão. |
 | `DELETE /api/admin/users/<id>` | Remove nome, email e senha da conta, revoga os tokens e desassocia presenças; mantém os simulados anonimizados. |
 

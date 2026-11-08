@@ -174,6 +174,7 @@ def dashboard_admin():
                 "email": estudante.email,
                 "is_admin": estudante.is_admin,
                 "online": estudante.id in presencas_por_estudante,
+                "last_access": isoformat_utc(estudante.last_activity_at),
                 "simulations": simulados_por_estudante.get(estudante.id, []),
             }
             for estudante in estudantes

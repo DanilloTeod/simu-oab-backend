@@ -34,9 +34,27 @@ def create_app(test_config=None):
     app.config["JWT_SECRET_KEY"] = api_jwt_key
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=30)
     app.config["JWT_TOKEN_LOCATION"] = ["headers"]
+    app.config["PERSONAL_THEME_STUDENT_IDS"] = os.getenv(
+        "PERSONAL_THEME_STUDENT_IDS",
+        "",
+    )
 
     if test_config:
         app.config.update(test_config)
+
+    try:
+        personal_theme_student_ids = frozenset(
+            int(item.strip())
+            for item in str(app.config["PERSONAL_THEME_STUDENT_IDS"]).split(",")
+            if item.strip()
+        )
+    except ValueError as erro:
+        raise RuntimeError(
+            "PERSONAL_THEME_STUDENT_IDS deve conter IDs inteiros separados por vírgula."
+        ) from erro
+    if any(student_id <= 0 for student_id in personal_theme_student_ids):
+        raise RuntimeError("PERSONAL_THEME_STUDENT_IDS deve conter IDs positivos.")
+    app.config["PERSONAL_THEME_STUDENT_IDS"] = personal_theme_student_ids
 
     frontend_origins = [
         origin.strip()

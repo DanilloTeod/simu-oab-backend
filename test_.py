@@ -17,6 +17,7 @@ from app.routes import auth
 @pytest.fixture
 def app(monkeypatch):
     monkeypatch.setenv("ADMIN_EMAILS", "admin@example.com")
+    monkeypatch.setenv("PERSONAL_THEME_STUDENT_IDS", "")
     monkeypatch.setenv(
         "FRONTEND_ORIGINS",
         "https://simu-oab.vercel.app,http://localhost:5173",
@@ -120,12 +121,60 @@ def test_login_identifica_administrador(client):
 
     assert resposta.status_code == 200
     assert resposta.get_json()["is_admin"] is True
+    assert resposta.get_json()["can_use_personal_theme"] is True
     with client.application.app_context():
         administrador = db.session.get(
             Estudante,
             client.application.config["TEST_ADMIN_ID"],
         )
         assert administrador.last_activity_at is not None
+
+
+def test_tema_pessoal_depende_do_id_autorizado_no_backend(client, app):
+    estudante_id = app.config["TEST_STUDENT_ID"]
+    app.config["PERSONAL_THEME_STUDENT_IDS"] = frozenset({estudante_id})
+    with app.app_context():
+        estudante = db.session.get(Estudante, estudante_id)
+        estudante.nome = "Aluna com nome não relacionado à permissão"
+        db.session.commit()
+
+    resposta_login = client.post("/api/login", json={
+        "email": "aluna@example.com",
+        "senha": "senha-de-teste",
+    })
+
+    assert resposta_login.status_code == 200
+    assert resposta_login.get_json()["can_use_personal_theme"] is True
+    token = resposta_login.get_json()["token"]
+    resposta_perfil = client.get(
+        "/api/perfil",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resposta_perfil.get_json()["can_use_personal_theme"] is True
+
+    app.config["PERSONAL_THEME_STUDENT_IDS"] = frozenset()
+    resposta_sem_permissao = client.get(
+        "/api/perfil",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resposta_sem_permissao.get_json()["can_use_personal_theme"] is False
+
+
+def test_tema_pessoal_nao_e_concedido_apenas_por_nome(client, app):
+    estudante_id = app.config["TEST_STUDENT_ID"]
+    app.config["PERSONAL_THEME_STUDENT_IDS"] = frozenset()
+    with app.app_context():
+        estudante = db.session.get(Estudante, estudante_id)
+        estudante.nome = "Aluna autorizada somente pelo identificador"
+        db.session.commit()
+
+    resposta = client.post("/api/login", json={
+        "email": "aluna@example.com",
+        "senha": "senha-de-teste",
+    })
+
+    assert resposta.status_code == 200
+    assert resposta.get_json()["can_use_personal_theme"] is False
 
 
 def test_sessao_expira_apos_uma_hora_sem_atividade(client, app):
@@ -579,6 +628,7 @@ def test_dashboard_lista_identidade_das_contas_online(client, app):
         item for item in resposta.get_json()["students"]
         if item["email"] == "aluna@example.com"
     )
+    assert estudante["last_access"].endswith("+00:00")
     assert estudante["simulations"][0]["submitted_at"].endswith("+00:00")
 
 

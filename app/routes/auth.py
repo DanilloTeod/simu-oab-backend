@@ -106,6 +106,13 @@ def email_configurado_como_admin(email):
     return email.strip().lower() in emails_admin
 
 
+def estudante_pode_usar_tema_pessoal(estudante):
+    return (
+        estudante.is_admin
+        or estudante.id in current_app.config["PERSONAL_THEME_STUDENT_IDS"]
+    )
+
+
 # Cadastro público
 @auth_bp.route("/api/cadastro", methods=["POST"])
 def cadastrar():
@@ -205,6 +212,7 @@ def login():
             "nome": estudante.nome,
         },
         "is_admin": estudante.is_admin,
+        "can_use_personal_theme": estudante_pode_usar_tema_pessoal(estudante),
     }), 200
 
 
@@ -242,6 +250,7 @@ def perfil():
         "nome": estudante.nome,
         "email": estudante.email,
         "is_admin": estudante.is_admin,
+        "can_use_personal_theme": estudante_pode_usar_tema_pessoal(estudante),
     }), 200
 
 
